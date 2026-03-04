@@ -1,0 +1,24 @@
+# --- Sensitive Data (GDPR) ---
+# Never upload the database or files uploaded by users
+data/
+uploads/
+
+# --- Credentials and Secrets ---
+# Files with passwords and AWS/SES tokens
+.env
+
+# --- SSL/TLS Certificates ---
+# Cloudflare origin certificates and private keys
+certs/*.pem
+certs/*.key
+certs/*.crt
+
+# --- Docker & System ---
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+
+# --- Repository Exceptions ---
+# Allow uploading examples so the user knows what to configure
+!.env.example
