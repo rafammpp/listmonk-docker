@@ -1,128 +1,192 @@
-# Listmonk Docker (Amazon SES + Cloudflare) with GDPR focus
+# Listmonk Docker with GDPR-focused defaults
 
-Self-hosted stack to run [listmonk](https://listmonk.app) on a VPS, send email through Amazon SES, and publish behind Cloudflare with strict TLS.
+Self-hosted `listmonk` behind Nginx, with PostgreSQL, encrypted backups to Cloudflare R2, and a setup flow intended to stay simple.
 
-> Note: this repository supports GDPR technical controls, but it is not legal advice.
+> This repository helps with technical GDPR measures, but it is not legal advice.
 
-## Architecture
+## Prerequisites
 
-- **Server:** Any VPS provider (EU datacenter recommended).
-- **Application:** `listmonk`.
-- **Database:** PostgreSQL 14 in an internal Docker network.
-- **Outbound mail:** Amazon SES via SMTP (`STARTTLS`, port `587`).
-- **Edge:** Cloudflare (`Full (Strict)`) + Nginx.
+Before you start, have these ready:
 
-## What this repository improves
-
-- `db` and `app` are not publicly exposed (`127.0.0.1:9000` only on host).
-- Nginx enforces HTTP→HTTPS redirect and security headers.
-- Runtime variables are centralized in `.env`.
-
-## 1) Server preparation
-
-```bash
-sudo apt update
-sudo apt install -y docker.io docker-compose-plugin
-sudo systemctl enable --now docker
-```
-
-Create persistent folders:
-
-```bash
-mkdir -p data/db uploads certs
-```
-
-## 2) Secret and app configuration
-
-1. Copy environment variables:
-   ```bash
-   cp .env.example .env
-   ```
-2. Edit `.env` and set long random passwords/secrets.
-3. Start the stack. listmonk will read all required runtime configuration from environment variables (`LISTMONK_*`).
-
-### Environment variables reference
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `TZ` | Yes | Container timezone for logs and runtime. |
-| `LISTMONK_DOMAIN` | Yes | Public domain used to access listmonk (documentation/reference value). |
-| `DB_USER` | Yes | PostgreSQL username used by listmonk. |
-| `DB_PASSWORD` | Yes | PostgreSQL password. Use a long random value. |
-| `DB_NAME` | Yes | PostgreSQL database name for listmonk. |
-| `LISTMONK_ADMIN_USER` | Optional | Super Admin username for one-time bootstrap only. |
-| `LISTMONK_ADMIN_PASSWORD` | Optional | Super Admin password for one-time bootstrap only. |
-
-For better security, keep `LISTMONK_ADMIN_USER` and `LISTMONK_ADMIN_PASSWORD` empty in `.env` and set them only during first startup:
-
-```bash
-LISTMONK_ADMIN_USER=admin LISTMONK_ADMIN_PASSWORD='change-me' docker compose up -d
-```
-
-After first login, unset/remove these two variables.
-
-## 3) TLS with Cloudflare Origin Certificate
-
-1. In Cloudflare, generate an **Origin Certificate** for your subdomain (for example `news.example.com`).
-2. Save files as:
+- a Debian/Ubuntu VPS in Europe with sudo access
+- a domain or subdomain managed in Cloudflare, pointing to that VPS
+- a Cloudflare Origin Certificate for that domain/subdomain:
    - `certs/cert.pem`
    - `certs/key.pem`
-3. Set Cloudflare SSL/TLS mode to **Full (Strict)**.
+- a Cloudflare R2 bucket
+- an R2 Lifecycle Rule configured for remote backup retention
+- an R2 access key pair with permission to read/write that bucket
 
-## 4) Amazon SES (EU region recommended)
+## What this stack does
 
-- Use an EU SMTP endpoint (for example `email-smtp.eu-west-1.amazonaws.com`).
-- Create SES SMTP credentials (not direct IAM access keys).
-- Verify domain/sender and publish SPF, DKIM, and DMARC.
-- In listmonk UI, configure SMTP with:
-   - Host: `email-smtp.eu-west-1.amazonaws.com`
-   - Port: `587`
-   - Encryption: `STARTTLS`
-   - Auth: `LOGIN`
-   - Username/Password: your SES SMTP credentials
+- `listmonk` only listens on `127.0.0.1:9000`
+- PostgreSQL stays on an internal Docker network
+- Nginx terminates HTTPS and adds basic security headers
+- backups are encrypted before upload to R2
+- runtime config is split into two files:
+  - `.env` for normal configuration
+  - `secrets/secrets.env` for secrets
 
-## 5) Start services
+## Files you need
+
+### 1. Normal configuration
+
+Copy [.env.example](.env.example) to `.env` and edit it.
+
+Variables kept in `.env`:
+
+- `TZ`
+- `LISTMONK_DOMAIN`
+- `BACKUP_RETENTION_DAYS`
+- `BACKUP_SCHEDULE`
+- `R2_BUCKET`
+- `R2_ENDPOINT`
+- `R2_PREFIX`
+
+### 2. Secrets
+
+Copy [secrets/secrets.env.example](secrets/secrets.env.example) to `secrets/secrets.env` and fill it in.
+
+Variables kept in `secrets/secrets.env`:
+
+- `POSTGRES_PASSWORD`
+- `BACKUP_PASSPHRASE`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+
+The setup script generates temporary first-login credentials automatically and passes them only to the initial `docker compose up -d`. They are not written to `.env` or `secrets/secrets.env`.
+
+### 3. TLS certificate
+
+Put your Cloudflare Origin certificate files here:
+
+- `certs/cert.pem`
+- `certs/key.pem`
+
+Use Cloudflare SSL/TLS mode `Full (Strict)`.
+
+## Host setup
+
+For a fresh Debian/Ubuntu host:
+
+```bash
+sudo ./scripts/setup-host.sh
+```
+
+The script:
+
+- installs Docker, Compose, UFW, OpenSSL, curl and unattended security updates
+- creates `data/`, `uploads/`, `backups/`, `secrets/` and `certs/`
+- reads existing `.env`, `secrets/secrets.env` and `certs/` if they are already there
+- asks only for missing values
+- can enable automatic security updates with `unattended-upgrades`
+- can enable a basic firewall for SSH, HTTP and HTTPS
+- starts the Docker stack automatically at the end
+- generates temporary bootstrap admin credentials for first login and prints them for immediate login without storing them in a file
+
+## Start the stack manually
+
+`setup-host.sh` starts the stack automatically at the end. Use this when you want to start it manually later:
 
 ```bash
 docker compose up -d
 docker compose logs -f app
 ```
 
-Access: `https://your-subdomain`
+Access:
 
-## First-run checklist
+- `https://your-domain`
 
-- DNS is proxied through Cloudflare and points to your server.
-- Cloudflare SSL/TLS mode is set to **Full (Strict)**.
-- You can log in to listmonk and create/update the Super Admin account.
-- SMTP is configured in `Admin -> Settings -> SMTP` with Amazon SES (`STARTTLS`, port `587`).
-- A test campaign to your own inbox is sent successfully and headers show SPF/DKIM/DMARC pass.
+## First login checklist
 
-## Minimum GDPR operations checklist
+- log in to `listmonk`
+- create your real admin user immediately
+- configure Amazon SES in `Admin -> Settings -> SMTP`
+- send a test message to yourself
+- enable double opt-in in `listmonk`
 
-- Enable **double opt-in** in listmonk.
-- Keep consent records (timestamp, source, and list).
-- Publish privacy notice and legal basis for processing.
-- Sign DPAs with processors/sub-processors (hosting provider, AWS).
-- Implement subscriber deletion workflow (right to erasure).
-- Minimize tracking when not strictly necessary.
+## TODO
 
-## Additional recommended security
+- document the full `listmonk` + Amazon SES configuration flow
 
-- Host firewall: open only `22`, `80`, and `443`.
-- SSH keys only (disable password login).
-- Encrypted backups and restore testing (DB + `uploads`).
-- Regular updates: `docker compose pull && docker compose up -d`.
+## Backups
+
+Automatic backups are run by the `backup` service.
+
+Manual backup:
+
+```bash
+./scripts/backup-to-r2.sh
+```
+
+What happens:
+
+- PostgreSQL is dumped
+- the dump is compressed and encrypted
+- the encrypted file and checksum are uploaded to R2
+- local backups older than `BACKUP_RETENTION_DAYS` are removed
+
+Remote retention should be configured with an R2 Lifecycle Rule.
+
+## Restore
+
+List available backups:
+
+```bash
+./scripts/restore-from-r2.sh --list
+```
+
+Restore the latest backup:
+
+```bash
+./scripts/restore-from-r2.sh
+```
+
+Restore a specific backup:
+
+```bash
+./scripts/restore-from-r2.sh <backup-key>
+```
+
+The host restore script asks for confirmation and stops `app` during restore unless you use `--no-stop`.
+
+## Migration
+
+To move the stack to another server:
+
+1. `git clone` the repository on the new host
+2. copy these items from the old host:
+   - `.env`
+   - `secrets/secrets.env`
+   - `certs/`
+3. run:
+   ```bash
+   sudo ./scripts/setup-host.sh
+   ```
+4. restore the database from R2 if needed:
+   ```bash
+   ./scripts/restore-from-r2.sh
+   ```
+
+If `.env`, `secrets/secrets.env` and `certs/` are already present, the setup script should only ask for whatever is still missing.
+
+## Minimal GDPR operational reminders
+
+This repository does not complete GDPR compliance on its own. At minimum, you still need to handle:
+
+- double opt-in
+- proof of consent
+- privacy notice
+- retention policy
+- deletion workflow
+- DPAs with OVH, AWS and Cloudflare
 
 ## Useful commands
 
 ```bash
-# Status
 docker compose ps
-
-# Restart services
 docker compose restart
-
-# Basic PostgreSQL backup
-docker compose exec -T db pg_dump -U "$DB_USER" "$DB_NAME" > backup.sql
+./scripts/backup-to-r2.sh
+./scripts/restore-from-r2.sh --list
+./scripts/restore-from-r2.sh
 ```

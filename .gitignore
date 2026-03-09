@@ -2,6 +2,8 @@
 # Never upload the database or files uploaded by users
 data/
 uploads/
+backups/
+secrets/*
 
 # --- Credentials and Secrets ---
 # Files with passwords and AWS/SES tokens
@@ -22,3 +24,5 @@ Thumbs.db
 # --- Repository Exceptions ---
 # Allow uploading examples so the user knows what to configure
 !.env.example
+!secrets/
+!secrets/secrets.env.example

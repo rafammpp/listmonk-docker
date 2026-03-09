@@ -2,19 +2,25 @@ services:
   db:
     image: postgres:14-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - .env
+      - ./secrets/secrets.env
     environment:
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_DB=${DB_NAME}
-      - TZ=${TZ}
+      - POSTGRES_USER=listmonk
+      - POSTGRES_DB=listmonk
     networks:
       - internal
     volumes:
       - ./data/db:/var/lib/postgresql/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U listmonk -d listmonk"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,27 +28,32 @@ services:
   app:
     image: listmonk/listmonk:latest
     restart: unless-stopped
-    command: [ "sh", "-c", "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''" ]
+    security_opt:
+      - no-new-privileges:true
+    command: [ "sh", "-ec", "export LISTMONK_db__password=\"$$POSTGRES_PASSWORD\"; ./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''" ]
     env_file:
       - .env
+      - ./secrets/secrets.env
     networks:
       - internal
-      - public
     ports:
       - "127.0.0.1:9000:9000"
     environment:
       - LISTMONK_app__address=0.0.0.0:9000
       - LISTMONK_db__host=db
       - LISTMONK_db__port=5432
-      - LISTMONK_db__user=${DB_USER}
-      - LISTMONK_db__password=${DB_PASSWORD}
-      - LISTMONK_db__database=${DB_NAME}
+      - LISTMONK_db__user=listmonk
+      - LISTMONK_db__database=listmonk
       - LISTMONK_db__ssl_mode=disable
       - LISTMONK_ADMIN_USER=${LISTMONK_ADMIN_USER:-}
       - LISTMONK_ADMIN_PASSWORD=${LISTMONK_ADMIN_PASSWORD:-}
-      - TZ=${TZ}
     volumes:
       - ./uploads:/listmonk/uploads
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       db:
         condition: service_healthy
@@ -50,17 +61,57 @@ services:
   nginx:
     image: nginx:alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
     ports:
       - "80:80"
       - "443:443"
     networks:
+      - internal
       - public
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./certs:/etc/nginx/certs:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       app:
         condition: service_started
+
+  backup:
+    build:
+      context: ./backup
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    env_file:
+      - .env
+      - ./secrets/secrets.env
+    environment:
+      - R2_REGION=auto
+    networks:
+      - internal
+      - public
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 networks:
   public:
