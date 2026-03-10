@@ -49,7 +49,7 @@ export AWS_EC2_METADATA_DISABLED=true
 mkdir -p "$BACKUPS_DIR" /tmp/backup-work
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-filename="listmonk-${DB_NAME}-${timestamp}.sql.gz.enc"
+filename="listmonk-db-${timestamp}.sql.gz.enc"
 local_file="${BACKUPS_DIR}/${filename}"
 local_checksum="${local_file}.sha256"
 temp_file="/tmp/backup-work/${filename}"
