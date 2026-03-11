@@ -76,7 +76,7 @@ age-keygen -y listmonk-backup.agekey
 
 The setup script generates temporary first-login credentials automatically and passes them only to the initial `docker compose up -d`. They are not written to `.env` or `secrets/secrets.env`.
 
-### 3. TLS certificate
+### 3. Cloudflare and TLS certificate
 
 Put your Cloudflare Origin certificate files here:
 
@@ -84,6 +84,8 @@ Put your Cloudflare Origin certificate files here:
 - `certs/key.pem`
 
 Use Cloudflare SSL/TLS mode `Full (Strict)`.
+
+Disable `cache everything` rule for the domain/subdomain, if you have it. It interferes with the admin interface.
 
 ## Host setup
 
@@ -127,9 +129,22 @@ Access:
 - send a test message to yourself
 - enable double opt-in in `listmonk`
 
-## TODO
+## Listmonk + Amazon SES configuration
+Login on AWS console on an eu region, and go to SES service. They will guide you through the process of verifying your domain, setting up DKIM and SPF records, and requesting production access if needed. Once your SES setup is complete, you can use the SMTP credentials provided by AWS in the `listmonk` admin settings to send emails.
 
-- document the full `listmonk` + Amazon SES configuration flow
+On your listmonk admin dashboard, navigate to `Settings -> SMTP` and enter the following details:
+- SMTP Host: `email-smtp.<region>.amazonaws.com` (replace with the host provided by AWS SES for your region)
+- SMTP Port: `587`
+- Auth protocol: `LOGIN`
+- SMTP Username: Your AWS SES SMTP username (not the same as your AWS access key)
+- SMTP Password: Your AWS SES SMTP password (not the same as your AWS secret key)
+- TLS: `STARTTLS`
+
+After entering these details, save the settings and send a test email to ensure that everything is configured correctly. If the test email is successful, your `listmonk` instance is now set up to send emails through Amazon SES.
+
+### Bounce handling
+To handle bounces and complaints from Amazon SES, you can set up an SNS topic and subscribe to it with an email address or an HTTP endpoint. This way, you can receive notifications about bounces and complaints, which is crucial for maintaining a good sender reputation and ensuring that your emails are delivered successfully.
+Follow this guide from listmonk docs: https://listmonk.app/docs/bounces/#amazon-simple-email-service-ses
 
 ## Backups
 
