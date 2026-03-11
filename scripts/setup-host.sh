@@ -159,11 +159,17 @@ show_generated_age_keypair() {
     echo "  $secret_key"
     echo
 
-    prompt_yes_no saved_key "Have you saved the age secret key outside this server?" "n"
-    if [[ "$saved_key" != "yes" ]]; then
-        echo "Save the age secret key and rerun the setup." >&2
-        exit 1
-    fi
+    while true; do
+        prompt_yes_no saved_key "Have you saved the age secret key outside this server?" "n"
+        if [[ "$saved_key" == "yes" ]]; then
+            return
+        fi
+
+        echo
+        echo "Please save the age secret key before continuing:"
+        echo "  $secret_key"
+        echo
+    done
 }
 
 prompt_secret() {
