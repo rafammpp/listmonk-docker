@@ -122,16 +122,21 @@ validate_age_public_key() {
 }
 
 generate_age_keypair() {
-    local temp_file public_key secret_key
+    local temp_dir temp_file public_key secret_key
 
-    temp_file=$(mktemp)
-    chmod 600 "$temp_file"
+    temp_dir=$(mktemp -d)
+    temp_file="$temp_dir/agekey.txt"
+
     age-keygen -o "$temp_file" >/dev/null 2>&1
 
-    public_key=$(age-keygen -y "$temp_file")
+    public_key=$(sed -n 's/^# public key: //p' "$temp_file" | tail -n 1)
+    if [[ -z "$public_key" ]]; then
+        public_key=$(age-keygen -y "$temp_file" 2>/dev/null || true)
+    fi
     secret_key=$(grep -E '^AGE-SECRET-KEY-1' "$temp_file" | tail -n 1 || true)
 
     rm -f "$temp_file"
+    rmdir "$temp_dir"
 
     [[ -n "$public_key" && -n "$secret_key" ]] || return 1
     printf '%s\n%s\n' "$public_key" "$secret_key"
