@@ -27,14 +27,14 @@ normalize_prefix() {
     printf '%s' "$1" | sed 's#^/*##; s#/*$##'
 }
 
+require_cmd age
 require_cmd aws
 require_cmd gzip
-require_cmd openssl
 require_cmd pg_dump
 require_cmd sha256sum
 
 require_var POSTGRES_PASSWORD
-require_var BACKUP_PASSPHRASE
+require_var BACKUP_AGE_PUBLIC_KEY
 require_var R2_BUCKET
 require_var R2_ENDPOINT
 require_var R2_ACCESS_KEY_ID
@@ -49,7 +49,7 @@ export AWS_EC2_METADATA_DISABLED=true
 mkdir -p "$BACKUPS_DIR" /tmp/backup-work
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-filename="listmonk-db-${timestamp}.sql.gz.enc"
+filename="listmonk-db-${timestamp}.sql.gz.age"
 local_file="${BACKUPS_DIR}/${filename}"
 local_checksum="${local_file}.sha256"
 temp_file="/tmp/backup-work/${filename}"
@@ -57,7 +57,7 @@ temp_checksum="${temp_file}.sha256"
 
 pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" \
     | gzip -9 \
-    | openssl enc -aes-256-cbc -pbkdf2 -salt -pass pass:"$BACKUP_PASSPHRASE" -out "$temp_file"
+    | age -r "$BACKUP_AGE_PUBLIC_KEY" -o "$temp_file"
 
 sha256sum "$temp_file" > "$temp_checksum"
 
@@ -86,7 +86,7 @@ case "$retention_days" in
         ;;
 esac
 
-find "$BACKUPS_DIR" -type f \( -name '*.sql.gz.enc' -o -name '*.sql.gz.enc.sha256' \) -mtime +"$retention_days" -delete
+find "$BACKUPS_DIR" -type f \( -name '*.sql.gz.age' -o -name '*.sql.gz.age.sha256' \) -mtime +"$retention_days" -delete
 
 echo "Encrypted backup created: $local_file"
 echo "Encrypted backup uploaded: $remote_file_uri"

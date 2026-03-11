@@ -35,24 +35,40 @@ normalize_prefix() {
 
 latest_backup_key() {
     aws --endpoint-url "$R2_ENDPOINT" s3 ls "s3://${R2_BUCKET}/${remote_prefix}" --recursive \
-        | awk '/\.sql\.gz\.enc$/ {print $1 " " $2 " " $4}' \
+    | awk '/\.sql\.gz\.age$/ {print $1 " " $2 " " $4}' \
         | sort \
         | tail -n 1 \
         | awk '{print $3}'
 }
 
+require_cmd age
 require_cmd aws
-require_cmd openssl
 require_cmd psql
 require_cmd sha256sum
 require_cmd gzip
 
 require_var POSTGRES_PASSWORD
-require_var BACKUP_PASSPHRASE
 require_var R2_BUCKET
 require_var R2_ENDPOINT
 require_var R2_ACCESS_KEY_ID
 require_var R2_SECRET_ACCESS_KEY
+
+read_age_secret_key() {
+    if ! IFS= read -r backup_age_secret_key; then
+        echo "Missing age secret key on stdin." >&2
+        exit 1
+    fi
+
+    backup_age_secret_key=$(printf '%s' "$backup_age_secret_key" | tr -d '\r')
+    case "$backup_age_secret_key" in
+        AGE-SECRET-KEY-1*)
+            ;;
+        *)
+            echo "Invalid age secret key provided on stdin." >&2
+            exit 1
+            ;;
+    esac
+}
 
 export PGPASSWORD="$POSTGRES_PASSWORD"
 export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
@@ -92,9 +108,18 @@ case "$backup_key" in
         ;;
 esac
 
+read_age_secret_key
+
 mkdir -p /tmp/restore-work
 encrypted_file="/tmp/restore-work/$(basename "$backup_key")"
 checksum_file="${encrypted_file}.sha256"
+identity_file=
+
+cleanup() {
+    rm -f "$encrypted_file" "$checksum_file" "${identity_file:-}"
+}
+
+trap cleanup EXIT INT TERM
 
 aws --endpoint-url "$R2_ENDPOINT" s3 cp "s3://${R2_BUCKET}/${backup_key}" "$encrypted_file"
 aws --endpoint-url "$R2_ENDPOINT" s3 cp "s3://${R2_BUCKET}/${backup_key}.sha256" "$checksum_file"
@@ -107,10 +132,23 @@ if [ "$expected_sum" != "$actual_sum" ]; then
     exit 1
 fi
 
-openssl enc -d -aes-256-cbc -pbkdf2 -pass pass:"$BACKUP_PASSPHRASE" -in "$encrypted_file" \
+case "$backup_key" in
+    *.sql.gz.age)
+        ;;
+    *)
+        echo "Unsupported backup format: $backup_key" >&2
+        exit 1
+        ;;
+esac
+
+identity_file="/tmp/restore-work/backup.agekey"
+printf '%s\n' "$backup_age_secret_key" > "$identity_file"
+backup_age_secret_key=
+chmod 600 "$identity_file"
+age -d -i "$identity_file" "$encrypted_file" \
     | gzip -d \
     | psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME"
-
-rm -f "$encrypted_file" "$checksum_file"
+trap - EXIT INT TERM
+cleanup
 
 echo "Restore completed successfully from: s3://${R2_BUCKET}/${backup_key}"

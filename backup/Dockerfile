@@ -4,11 +4,11 @@ ARG SUPERCRONIC_VERSION=v0.2.38
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        age \
         awscli \
         ca-certificates \
         curl \
         gzip \
-        openssl \
         postgresql-client \
         tzdata \
     && rm -rf /var/lib/apt/lists/*

@@ -13,11 +13,11 @@ TZ_VALUE=
 LISTMONK_DOMAIN_VALUE=
 BACKUP_RETENTION_DAYS_VALUE=
 BACKUP_SCHEDULE_VALUE=
+BACKUP_AGE_PUBLIC_KEY_VALUE=
 R2_BUCKET_VALUE=
 R2_ENDPOINT_VALUE=
 R2_PREFIX_VALUE=
 POSTGRES_PASSWORD_VALUE=
-BACKUP_PASSPHRASE_VALUE=
 R2_ACCESS_KEY_ID_VALUE=
 R2_SECRET_ACCESS_KEY_VALUE=
 
@@ -74,7 +74,7 @@ load_existing_secrets() {
     fi
 
     POSTGRES_PASSWORD_VALUE=$(read_env_value "$SECRETS_FILE" POSTGRES_PASSWORD)
-    BACKUP_PASSPHRASE_VALUE=$(read_env_value "$SECRETS_FILE" BACKUP_PASSPHRASE)
+    BACKUP_AGE_PUBLIC_KEY_VALUE=$(read_env_value "$SECRETS_FILE" BACKUP_AGE_PUBLIC_KEY)
     R2_ACCESS_KEY_ID_VALUE=$(read_env_value "$SECRETS_FILE" R2_ACCESS_KEY_ID)
     R2_SECRET_ACCESS_KEY_VALUE=$(read_env_value "$SECRETS_FILE" R2_SECRET_ACCESS_KEY)
 }
@@ -111,6 +111,53 @@ prompt_default() {
             fi
             echo "This value cannot be empty."
         done
+    fi
+}
+
+validate_age_public_key() {
+    local public_key=$1
+
+    [[ -n "$public_key" ]] || return 1
+    printf '' | age -r "$public_key" >/dev/null 2>&1
+}
+
+generate_age_keypair() {
+    local temp_file public_key secret_key
+
+    temp_file=$(mktemp)
+    chmod 600 "$temp_file"
+    age-keygen -o "$temp_file" >/dev/null 2>&1
+
+    public_key=$(age-keygen -y "$temp_file")
+    secret_key=$(grep -E '^AGE-SECRET-KEY-1' "$temp_file" | tail -n 1 || true)
+
+    rm -f "$temp_file"
+
+    [[ -n "$public_key" && -n "$secret_key" ]] || return 1
+    printf '%s\n%s\n' "$public_key" "$secret_key"
+}
+
+show_generated_age_keypair() {
+    local public_key=$1
+    local secret_key=$2
+    local saved_key
+
+    echo
+    echo "==> Generated a new age backup keypair"
+    echo "Save the secret key outside this server now. It is required to restore backups."
+    echo "The setup script will store only the public key in $SECRETS_FILE."
+    echo
+    echo "Public key (will be saved as BACKUP_AGE_PUBLIC_KEY):"
+    echo "  $public_key"
+    echo
+    echo "Secret key (save this in your password manager or another safe place):"
+    echo "  $secret_key"
+    echo
+
+    prompt_yes_no saved_key "Have you saved the age secret key outside this server?" "n"
+    if [[ "$saved_key" != "yes" ]]; then
+        echo "Save the age secret key and rerun the setup." >&2
+        exit 1
     fi
 }
 
@@ -165,14 +212,14 @@ generate_temp_admin_credentials() {
 
 write_secrets_file() {
     local postgres_password=$1
-    local backup_passphrase=$2
+    local backup_age_public_key=$2
     local r2_access_key_id=$3
     local r2_secret_access_key=$4
 
     install -m 700 -d "$SECRETS_DIR"
     cat > "$SECRETS_FILE" <<EOF
 POSTGRES_PASSWORD=$postgres_password
-BACKUP_PASSPHRASE=$backup_passphrase
+BACKUP_AGE_PUBLIC_KEY=$backup_age_public_key
 R2_ACCESS_KEY_ID=$r2_access_key_id
 R2_SECRET_ACCESS_KEY=$r2_secret_access_key
 EOF
@@ -279,8 +326,9 @@ EOF
 }
 
 main() {
-    local tz domain backup_retention_days backup_schedule r2_bucket r2_endpoint r2_prefix
-    local postgres_password backup_passphrase r2_access_key_id r2_secret_access_key
+    local tz domain backup_retention_days backup_schedule backup_age_public_key r2_bucket r2_endpoint r2_prefix
+    local postgres_password r2_access_key_id r2_secret_access_key
+    local generated_age_keypair generated_backup_age_secret_key
 
     require_root
     require_apt
@@ -291,7 +339,7 @@ main() {
     # https://docs.docker.com/engine/install/debian/#install-using-the-repository
     # Add Docker's official GPG key:
     apt update
-    apt install ca-certificates curl
+    apt install -y ca-certificates curl
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
     chmod a+r /etc/apt/keyrings/docker.asc
@@ -306,7 +354,7 @@ Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
     apt update
-    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ufw openssl ca-certificates curl unattended-upgrades apt-listchanges
+    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ufw openssl age ca-certificates curl unattended-upgrades apt-listchanges
     systemctl enable --now docker
     maybe_add_docker_group
 
@@ -318,11 +366,11 @@ EOF
     domain=$LISTMONK_DOMAIN_VALUE
     backup_retention_days=$BACKUP_RETENTION_DAYS_VALUE
     backup_schedule=$BACKUP_SCHEDULE_VALUE
+    backup_age_public_key=$BACKUP_AGE_PUBLIC_KEY_VALUE
     r2_bucket=$R2_BUCKET_VALUE
     r2_endpoint=$R2_ENDPOINT_VALUE
     r2_prefix=$R2_PREFIX_VALUE
     postgres_password=$POSTGRES_PASSWORD_VALUE
-    backup_passphrase=$BACKUP_PASSPHRASE_VALUE
     r2_access_key_id=$R2_ACCESS_KEY_ID_VALUE
     r2_secret_access_key=$R2_SECRET_ACCESS_KEY_VALUE
 
@@ -330,6 +378,24 @@ EOF
     resolve_value domain "Public domain for listmonk" "news.example.com"
     resolve_value backup_retention_days "Days to keep encrypted local backups" "7"
     resolve_value backup_schedule "Backup schedule (cron expression)" "0 3 * * *"
+    if [[ -n "$backup_age_public_key" ]]; then
+        if ! validate_age_public_key "$backup_age_public_key"; then
+            echo "Existing BACKUP_AGE_PUBLIC_KEY in $SECRETS_FILE is not valid." >&2
+            exit 1
+        fi
+        echo "Backup age public key already present in $SECRETS_FILE."
+    fi
+
+    if [[ -z "$backup_age_public_key" ]]; then
+        if ! generated_age_keypair=$(generate_age_keypair); then
+            echo "Failed to generate an age backup keypair." >&2
+            exit 1
+        fi
+        backup_age_public_key=$(printf '%s\n' "$generated_age_keypair" | sed -n '1p')
+        generated_backup_age_secret_key=$(printf '%s\n' "$generated_age_keypair" | sed -n '2p')
+        show_generated_age_keypair "$backup_age_public_key" "$generated_backup_age_secret_key"
+    fi
+
     resolve_value r2_bucket "Cloudflare R2 bucket name"
     resolve_value r2_endpoint "Cloudflare R2 S3 endpoint (https://<account-id>.r2.cloudflarestorage.com)"
     resolve_value r2_prefix "R2 prefix/folder" "listmonk"
@@ -339,12 +405,6 @@ EOF
         echo "Database password already present in $SECRETS_FILE."
     else
         prompt_secret postgres_password "Database password (leave blank to auto-generate): " true
-    fi
-
-    if [[ -n "$backup_passphrase" ]]; then
-        echo "Backup passphrase already present in $SECRETS_FILE."
-    else
-        prompt_secret backup_passphrase "Backup encryption passphrase (leave blank to auto-generate): " true
     fi
 
     if [[ -n "$r2_access_key_id" ]]; then
@@ -361,7 +421,7 @@ EOF
 
     write_env_file "$tz" "$domain" "$backup_retention_days" "$backup_schedule" "$r2_bucket" "$r2_endpoint" "$r2_prefix"
     echo "Wrote $ENV_FILE"
-    write_secrets_file "$postgres_password" "$backup_passphrase" "$r2_access_key_id" "$r2_secret_access_key"
+    write_secrets_file "$postgres_password" "$backup_age_public_key" "$r2_access_key_id" "$r2_secret_access_key"
     echo "Wrote $SECRETS_FILE"
 
     maybe_capture_pem "Cloudflare Origin certificate" "$CERT_FILE"
@@ -398,6 +458,10 @@ EOF
     echo ""
     echo "Create your real admin user immediately after login."
     echo "These temporary credentials were not written to any file."
+    if [[ -n "$generated_backup_age_secret_key" ]]; then
+        echo "A new age secret key was generated and shown above. It was not stored on the server."
+    fi
+    echo "Restore will ask for the age secret key when needed."
     echo "  4. Test a backup with: ./scripts/backup-to-r2.sh"
 }
 

@@ -24,6 +24,54 @@ ensure_env() {
     fi
 }
 
+read_hidden_value() {
+    prompt_message=$1
+
+    if [ ! -t 0 ] || [ ! -r /dev/tty ]; then
+        echo "An interactive terminal is required to paste the age secret key." >&2
+        exit 1
+    fi
+
+    old_stty=$(stty -g </dev/tty)
+    trap 'stty "$old_stty" </dev/tty' EXIT HUP INT TERM
+    printf "%s" "$prompt_message" >/dev/tty
+    stty -echo </dev/tty
+    IFS= read -r hidden_value </dev/tty
+    stty "$old_stty" </dev/tty
+    trap - EXIT HUP INT TERM
+    printf '\n' >/dev/tty
+    printf '%s' "$hidden_value"
+}
+
+load_age_secret_key() {
+    if [ ! -t 0 ]; then
+        echo "Restore requires an interactive terminal to paste the age secret key." >&2
+        exit 1
+    fi
+
+    backup_age_secret_key=$(read_hidden_value "Paste the age secret key (AGE-SECRET-KEY-1...): ")
+
+    backup_age_secret_key=$(printf '%s' "$backup_age_secret_key" | tr -d '\r')
+    case "$backup_age_secret_key" in
+        AGE-SECRET-KEY-1*)
+            ;;
+        *)
+            echo "Invalid age secret key. Expected a line starting with AGE-SECRET-KEY-1." >&2
+            exit 1
+            ;;
+    esac
+}
+
+run_restore_in_backup_container() {
+    if [ -n "$backup_key" ]; then
+        printf '%s\n' "$backup_age_secret_key" | docker compose exec -T backup /usr/local/bin/restore-from-r2.sh "$backup_key"
+    else
+        printf '%s\n' "$backup_age_secret_key" | docker compose exec -T backup /usr/local/bin/restore-from-r2.sh
+    fi
+
+    backup_age_secret_key=
+}
+
 confirm_restore() {
     prompt_message=$1
 
@@ -47,6 +95,7 @@ confirm_restore() {
 list_only=false
 stop_app=true
 assume_yes=false
+backup_age_secret_key=
 backup_key=
 
 while [ "$#" -gt 0 ]; do
@@ -92,6 +141,8 @@ if [ "$assume_yes" != true ]; then
     fi
 fi
 
+load_age_secret_key
+
 app_was_running=false
 if [ "$stop_app" = true ]; then
     if docker compose ps --status running --services | grep -qx 'app'; then
@@ -110,8 +161,4 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-if [ -n "$backup_key" ]; then
-    docker compose exec backup /usr/local/bin/restore-from-r2.sh "$backup_key"
-else
-    docker compose exec backup /usr/local/bin/restore-from-r2.sh
-fi
+run_restore_in_backup_container
