@@ -146,6 +146,20 @@ After entering these details, save the settings and send a test email to ensure 
 To handle bounces and complaints from Amazon SES, you can set up an SNS topic and subscribe to it with an email address or an HTTP endpoint. This way, you can receive notifications about bounces and complaints, which is crucial for maintaining a good sender reputation and ensuring that your emails are delivered successfully.
 Follow this guide from listmonk docs: https://listmonk.app/docs/bounces/#amazon-simple-email-service-ses
 
+#### Troubleshooting repeated SES simulator tests
+
+If SES webhooks reach `/webhooks/service/ses` and return `200`, but no new bounce appears in `listmonk`, check the existing bounce history for that subscriber before blaming Cloudflare.
+
+`listmonk` counts existing bounces per subscriber and type (`soft`, `hard`, `complaint`). Once the configured threshold in `Settings -> Bounces` has already been reached, or the subscriber is already `blocklisted`, later webhook deliveries can still return `200` without inserting a new bounce row. In that situation, the campaign may continue to show `0` new bounces even though SNS delivered the webhook successfully.
+
+This commonly happens when testing multiple times with Amazon SES simulator addresses such as:
+
+- `ooto@simulator.amazonses.com`
+- `bounce@simulator.amazonses.com`
+- `complaint@simulator.amazonses.com`
+
+Before repeating those tests, delete the old bounce records for the simulator subscribers or temporarily raise the bounce thresholds in `Settings -> Bounces`.
+
 ## Backups
 
 Automatic backups are run by the `backup` service.
