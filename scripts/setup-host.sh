@@ -436,8 +436,27 @@ EOF
     fi
 }
 
+auto_updates_are_enabled() {
+    local apt_config_dump
+
+    if ! command -v apt-config >/dev/null 2>&1; then
+        return 1
+    fi
+
+    apt_config_dump=$(apt-config dump 2>/dev/null || true)
+    [[ -n "$apt_config_dump" ]] || return 1
+
+    grep -Eq 'APT::Periodic::Update-Package-Lists "1";' <<<"$apt_config_dump" || return 1
+    grep -Eq 'APT::Periodic::Unattended-Upgrade "1";' <<<"$apt_config_dump" || return 1
+}
+
 configure_auto_updates() {
     local enable_auto_updates
+
+    if auto_updates_are_enabled; then
+        echo "Automatic security updates are already enabled."
+        return
+    fi
 
     prompt_yes_no enable_auto_updates "Enable automatic security updates with unattended-upgrades?" "y"
     if [[ "$enable_auto_updates" != "yes" ]]; then
