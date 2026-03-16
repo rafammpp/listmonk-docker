@@ -67,7 +67,7 @@ Typical values in `.env`:
 - `BACKUP_RETENTION_DAYS`
 - `BACKUP_SCHEDULE`
 - `R2_BUCKET`
-- `R2_ENDPOINT`
+- `R2_ENDPOINT` (account-level endpoint only, for example `https://<account-id>.eu.r2.cloudflarestorage.com`, without `/<bucket>` or `/backups`)
 - `R2_PREFIX` (typically `backups` for paths like `R2_BUCKET/backups/db-...sql.gz.age`)
 
 Typical values in `secrets/secrets.env`:
@@ -177,6 +177,8 @@ What happens:
 - local backups older than `BACKUP_RETENTION_DAYS` are removed
 
 By default, new backups use object names like `backups/db-20260316T030000Z.sql.gz.age` and `backups/db-20260316T030000Z.sql.gz.age.sha256` inside the bucket.
+
+If you see an extra top-level folder with the same name as the bucket, `R2_ENDPOINT` is wrong. It must be the account-level endpoint only, not `https://.../<bucket>`.
 
 Remote retention should be configured with an R2 Lifecycle Rule.
 

@@ -33,8 +33,37 @@ normalize_prefix() {
     printf '%s' "$1" | sed 's#^/*##; s#/*$##'
 }
 
+normalize_endpoint() {
+    printf '%s' "$1" | sed 's#/*$##'
+}
+
+validate_r2_endpoint() {
+    endpoint=$(normalize_endpoint "$1")
+
+    case "$endpoint" in
+        http://*|https://*)
+            ;;
+        *)
+            echo "R2_ENDPOINT must start with http:// or https://" >&2
+            exit 1
+            ;;
+    esac
+
+    endpoint_host=${endpoint#http://}
+    endpoint_host=${endpoint_host#https://}
+
+    case "$endpoint_host" in
+        ''|*/*|*[\?#]*)
+            echo "R2_ENDPOINT must be the account-level endpoint only, without /${R2_BUCKET} or any other path. Example: https://<account-id>.eu.r2.cloudflarestorage.com" >&2
+            exit 1
+            ;;
+    esac
+
+    printf '%s' "$endpoint"
+}
+
 latest_backup_key() {
-    aws --endpoint-url "$R2_ENDPOINT" s3 ls "s3://${R2_BUCKET}/${remote_prefix}" --recursive \
+    aws --endpoint-url "$r2_endpoint" s3 ls "s3://${R2_BUCKET}/${remote_prefix}" --recursive \
     | awk '/\.sql\.gz\.age$/ {print $1 " " $2 " " $4}' \
         | sort \
         | tail -n 1 \
@@ -76,6 +105,8 @@ export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
 export AWS_DEFAULT_REGION="auto"
 export AWS_EC2_METADATA_DISABLED=true
 
+r2_endpoint=$(validate_r2_endpoint "$R2_ENDPOINT")
+
 r2_prefix=$(normalize_prefix "${R2_PREFIX:-backups}")
 if [ -n "$r2_prefix" ]; then
     remote_prefix="${r2_prefix}/"
@@ -84,7 +115,7 @@ else
 fi
 
 if [ "${1:-}" = "--list" ]; then
-    aws --endpoint-url "$R2_ENDPOINT" s3 ls "s3://${R2_BUCKET}/${remote_prefix}" --recursive
+    aws --endpoint-url "$r2_endpoint" s3 ls "s3://${R2_BUCKET}/${remote_prefix}" --recursive
     exit 0
 fi
 
@@ -121,8 +152,8 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-aws --endpoint-url "$R2_ENDPOINT" s3 cp "s3://${R2_BUCKET}/${backup_key}" "$encrypted_file"
-aws --endpoint-url "$R2_ENDPOINT" s3 cp "s3://${R2_BUCKET}/${backup_key}.sha256" "$checksum_file"
+aws --endpoint-url "$r2_endpoint" s3 cp "s3://${R2_BUCKET}/${backup_key}" "$encrypted_file"
+aws --endpoint-url "$r2_endpoint" s3 cp "s3://${R2_BUCKET}/${backup_key}.sha256" "$checksum_file"
 
 expected_sum=$(awk '{print $1}' "$checksum_file")
 actual_sum=$(sha256sum "$encrypted_file" | awk '{print $1}')

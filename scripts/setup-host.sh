@@ -123,6 +123,34 @@ validate_age_public_key() {
     printf '' | age -r "$public_key" >/dev/null 2>&1
 }
 
+normalize_r2_endpoint() {
+    printf '%s' "$1" | sed 's#/*$##'
+}
+
+validate_r2_endpoint() {
+    local endpoint=$1
+    local endpoint_without_scheme
+
+    [[ -n "$endpoint" ]] || return 1
+
+    case "$endpoint" in
+        http://*|https://*)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    endpoint_without_scheme=${endpoint#http://}
+    endpoint_without_scheme=${endpoint_without_scheme#https://}
+
+    case "$endpoint_without_scheme" in
+        ''|*/*|*[\?#]*)
+            return 1
+            ;;
+    esac
+}
+
 generate_age_keypair() {
     local temp_dir temp_file public_key secret_key
 
@@ -518,7 +546,16 @@ EOF
     fi
 
     resolve_value r2_bucket "Cloudflare R2 bucket name"
-    resolve_value r2_endpoint "Cloudflare R2 S3 endpoint (https://<account-id>.r2.cloudflarestorage.com)"
+    while true; do
+        resolve_value r2_endpoint "Cloudflare R2 S3 endpoint (https://<account-id>.r2.cloudflarestorage.com)"
+        r2_endpoint=$(normalize_r2_endpoint "$r2_endpoint")
+        if validate_r2_endpoint "$r2_endpoint"; then
+            break
+        fi
+        echo "R2_ENDPOINT must be the account-level endpoint only, without /$r2_bucket or any other path." >&2
+        echo "Example: https://<account-id>.eu.r2.cloudflarestorage.com" >&2
+        r2_endpoint=
+    done
     resolve_value r2_prefix "R2 prefix/folder" "backups"
 
     echo "==> Collecting secrets"
@@ -560,7 +597,7 @@ EOF
     echo "Generated temporary bootstrap admin credentials for first login."
     (
         cd "$ROOT_DIR" && \
-        docker compose up -d db backup && \
+        docker compose up -d --build db backup && \
         LISTMONK_ADMIN_USER="$TEMP_ADMIN_USER" \
         LISTMONK_ADMIN_PASSWORD="$TEMP_ADMIN_PASSWORD" \
         docker compose up -d --force-recreate app && \

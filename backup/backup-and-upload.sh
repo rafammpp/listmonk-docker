@@ -27,6 +27,35 @@ normalize_prefix() {
     printf '%s' "$1" | sed 's#^/*##; s#/*$##'
 }
 
+normalize_endpoint() {
+    printf '%s' "$1" | sed 's#/*$##'
+}
+
+validate_r2_endpoint() {
+    endpoint=$(normalize_endpoint "$1")
+
+    case "$endpoint" in
+        http://*|https://*)
+            ;;
+        *)
+            echo "R2_ENDPOINT must start with http:// or https://" >&2
+            exit 1
+            ;;
+    esac
+
+    endpoint_host=${endpoint#http://}
+    endpoint_host=${endpoint_host#https://}
+
+    case "$endpoint_host" in
+        ''|*/*|*[\?#]*)
+            echo "R2_ENDPOINT must be the account-level endpoint only, without /${R2_BUCKET} or any other path. Example: https://<account-id>.eu.r2.cloudflarestorage.com" >&2
+            exit 1
+            ;;
+    esac
+
+    printf '%s' "$endpoint"
+}
+
 require_cmd age
 require_cmd aws
 require_cmd gzip
@@ -45,6 +74,8 @@ export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
 export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
 export AWS_DEFAULT_REGION="auto"
 export AWS_EC2_METADATA_DISABLED=true
+
+r2_endpoint=$(validate_r2_endpoint "$R2_ENDPOINT")
 
 mkdir -p "$BACKUPS_DIR" /tmp/backup-work
 
@@ -74,8 +105,8 @@ fi
 remote_file_uri="s3://${R2_BUCKET}/${remote_prefix}${filename}"
 remote_checksum_uri="${remote_file_uri}.sha256"
 
-aws --endpoint-url "$R2_ENDPOINT" s3 cp "$local_file" "$remote_file_uri"
-aws --endpoint-url "$R2_ENDPOINT" s3 cp "$local_checksum" "$remote_checksum_uri"
+aws --endpoint-url "$r2_endpoint" s3 cp "$local_file" "$remote_file_uri"
+aws --endpoint-url "$r2_endpoint" s3 cp "$local_checksum" "$remote_checksum_uri"
 
 retention_days=${BACKUP_RETENTION_DAYS:-7}
 
