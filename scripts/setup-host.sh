@@ -449,7 +449,7 @@ EOF
 main() {
     local tz domain backup_retention_days backup_schedule backup_age_public_key r2_bucket r2_endpoint r2_prefix
     local postgres_password r2_access_key_id r2_secret_access_key
-    local generated_age_keypair generated_backup_age_secret_key
+    local generated_age_keypair="" generated_backup_age_secret_key=""
 
     require_root
     require_apt
@@ -581,7 +581,7 @@ EOF
     echo ""
     echo "Create your real admin user immediately after login."
     echo "These temporary credentials were not written to any file."
-    if [[ -n "$generated_backup_age_secret_key" ]]; then
+    if [[ -n "${generated_backup_age_secret_key:-}" ]]; then
         echo "A new age secret key was generated and shown above. It was not stored on the server."
     fi
     echo "Restore will ask for the age secret key when needed."
