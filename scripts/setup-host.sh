@@ -332,8 +332,16 @@ detect_ssh_service() {
 }
 
 ssh_root_login_is_disabled() {
+    local sshd_output
+
     command -v sshd >/dev/null 2>&1 || return 1
-    sshd -T 2>/dev/null | grep -q '^permitrootlogin no$'
+
+    sshd_output=$(sshd -T 2>/dev/null || true)
+    if [[ -n "$sshd_output" ]] && grep -q '^permitrootlogin no$' <<<"$sshd_output"; then
+        return 0
+    fi
+
+    [[ -f "$SSH_HARDENING_FILE" ]] && grep -Eqi '^[[:space:]]*PermitRootLogin[[:space:]]+no([[:space:]]|$)' "$SSH_HARDENING_FILE"
 }
 
 configure_ssh_hardening() {
