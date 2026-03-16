@@ -8,6 +8,8 @@ SECRETS_FILE="$SECRETS_DIR/secrets.env"
 CERTS_DIR="$ROOT_DIR/certs"
 CERT_FILE="$CERTS_DIR/cert.pem"
 KEY_FILE="$CERTS_DIR/key.pem"
+SSH_HARDENING_FILE="/etc/ssh/sshd_config.d/99-listmonk-hardening.conf"
+FAIL2BAN_SSH_JAIL_FILE="/etc/fail2ban/jail.d/99-listmonk-sshd.local"
 
 TZ_VALUE=
 LISTMONK_DOMAIN_VALUE=
@@ -290,6 +292,114 @@ configure_firewall() {
     ufw --force enable
 }
 
+detect_ssh_service() {
+    if systemctl cat ssh.service >/dev/null 2>&1; then
+        printf '%s' "ssh"
+        return
+    fi
+
+    if systemctl cat sshd.service >/dev/null 2>&1; then
+        printf '%s' "sshd"
+    fi
+}
+
+ssh_root_login_is_disabled() {
+    command -v sshd >/dev/null 2>&1 || return 1
+    sshd -T 2>/dev/null | grep -q '^permitrootlogin no$'
+}
+
+configure_ssh_hardening() {
+    local disable_root_login default_answer ssh_service
+
+    if ! command -v sshd >/dev/null 2>&1; then
+        echo "OpenSSH server not found. Skipping SSH hardening."
+        return
+    fi
+
+    if ssh_root_login_is_disabled; then
+        echo "SSH login for root is already disabled."
+        return
+    fi
+
+    default_answer="y"
+    if [[ -z "${SUDO_USER:-}" || "$SUDO_USER" == "root" ]]; then
+        default_answer="n"
+        echo "No non-root sudo user was detected automatically."
+        echo "Only disable SSH login for root if you already have another admin account you can use."
+    fi
+
+    prompt_yes_no disable_root_login "Disable SSH login for root (PermitRootLogin no)?" "$default_answer"
+    if [[ "$disable_root_login" != "yes" ]]; then
+        return
+    fi
+
+    install -m 755 -d /etc/ssh/sshd_config.d
+    cat > "$SSH_HARDENING_FILE" <<'EOF'
+# Managed by listmonk setup-host.sh
+PermitRootLogin no
+EOF
+
+    if ! sshd -t; then
+        rm -f "$SSH_HARDENING_FILE"
+        echo "SSH configuration test failed. Removed $SSH_HARDENING_FILE." >&2
+        exit 1
+    fi
+
+    ssh_service=$(detect_ssh_service)
+    if [[ -n "$ssh_service" ]]; then
+        systemctl reload "$ssh_service" >/dev/null 2>&1 || systemctl restart "$ssh_service" >/dev/null 2>&1 || true
+    fi
+
+    echo "Disabled SSH login for root in $SSH_HARDENING_FILE."
+    echo "Before closing this session, confirm that your normal admin user can still log in via SSH."
+}
+
+configure_fail2ban() {
+    local enable_fail2ban
+
+    if ! command -v fail2ban-client >/dev/null 2>&1; then
+        echo "fail2ban is not installed. Skipping fail2ban configuration."
+        return
+    fi
+
+    if systemctl is-active --quiet fail2ban && fail2ban-client status sshd >/dev/null 2>&1; then
+        echo "Fail2ban is already protecting SSH."
+        return
+    fi
+
+    prompt_yes_no enable_fail2ban "Enable fail2ban protection for SSH brute-force attempts?" "y"
+    if [[ "$enable_fail2ban" != "yes" ]]; then
+        return
+    fi
+
+    install -m 755 -d /etc/fail2ban/jail.d
+    cat > "$FAIL2BAN_SSH_JAIL_FILE" <<'EOF'
+# Managed by listmonk setup-host.sh
+[sshd]
+enabled = true
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h
+EOF
+
+    if ! fail2ban-client -t >/dev/null 2>&1; then
+        rm -f "$FAIL2BAN_SSH_JAIL_FILE"
+        echo "Fail2ban configuration test failed. Removed $FAIL2BAN_SSH_JAIL_FILE." >&2
+        exit 1
+    fi
+
+    systemctl enable --now fail2ban >/dev/null 2>&1 || true
+    systemctl restart fail2ban >/dev/null 2>&1 || true
+
+    if fail2ban-client status sshd >/dev/null 2>&1; then
+        echo "Fail2ban is now protecting SSH."
+    else
+        echo "Fail2ban was configured, but the SSH jail could not be verified automatically." >&2
+        echo "Check fail2ban status manually after setup." >&2
+    fi
+}
+
 configure_auto_updates() {
     local enable_auto_updates
 
@@ -365,7 +475,7 @@ Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
     apt update
-    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ufw openssl age ca-certificates curl unattended-upgrades apt-listchanges
+    apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin ufw fail2ban openssl age ca-certificates curl unattended-upgrades apt-listchanges
     systemctl enable --now docker
     maybe_add_docker_group
 
@@ -409,7 +519,7 @@ EOF
 
     resolve_value r2_bucket "Cloudflare R2 bucket name"
     resolve_value r2_endpoint "Cloudflare R2 S3 endpoint (https://<account-id>.r2.cloudflarestorage.com)"
-    resolve_value r2_prefix "R2 prefix/folder" "listmonk"
+    resolve_value r2_prefix "R2 prefix/folder" "backups"
 
     echo "==> Collecting secrets"
     if [[ -n "$postgres_password" ]]; then
@@ -440,6 +550,8 @@ EOF
 
     configure_auto_updates
     configure_firewall
+    configure_ssh_hardening
+    configure_fail2ban
     ensure_tls_files
     require_docker_compose
 

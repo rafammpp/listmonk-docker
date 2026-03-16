@@ -49,7 +49,7 @@ export AWS_EC2_METADATA_DISABLED=true
 mkdir -p "$BACKUPS_DIR" /tmp/backup-work
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-filename="listmonk-db-${timestamp}.sql.gz.age"
+filename="db-${timestamp}.sql.gz.age"
 local_file="${BACKUPS_DIR}/${filename}"
 local_checksum="${local_file}.sha256"
 temp_file="/tmp/backup-work/${filename}"
@@ -64,7 +64,7 @@ sha256sum "$temp_file" > "$temp_checksum"
 mv "$temp_file" "$local_file"
 mv "$temp_checksum" "$local_checksum"
 
-r2_prefix=$(normalize_prefix "${R2_PREFIX:-listmonk}")
+r2_prefix=$(normalize_prefix "${R2_PREFIX:-backups}")
 if [ -n "$r2_prefix" ]; then
     remote_prefix="${r2_prefix}/"
 else

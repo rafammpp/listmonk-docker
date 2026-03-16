@@ -76,7 +76,7 @@ export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
 export AWS_DEFAULT_REGION="auto"
 export AWS_EC2_METADATA_DISABLED=true
 
-r2_prefix=$(normalize_prefix "${R2_PREFIX:-listmonk}")
+r2_prefix=$(normalize_prefix "${R2_PREFIX:-backups}")
 if [ -n "$r2_prefix" ]; then
     remote_prefix="${r2_prefix}/"
 else

@@ -17,7 +17,7 @@ Before you start, have these ready:
 - an R2 Lifecycle Rule configured for remote backup retention
 - an R2 access key pair with permission to read/write that bucket
 
-`setup-host.sh` can generate an `age` backup keypair for you. If you already have one, copy [secrets/secrets.env.example](secrets/secrets.env.example) to `secrets/secrets.env` and put it there before running setup.
+`setup-host.sh` can generate an `age` backup keypair for you. If you already have one, you can optionally pre-create [secrets/secrets.env](secrets/secrets.env) from [secrets/secrets.env.example](secrets/secrets.env.example) and put only `BACKUP_AGE_PUBLIC_KEY` there before running setup.
 
 ## What this stack does
 
@@ -30,13 +30,37 @@ Before you start, have these ready:
   - `.env` for normal configuration
   - `secrets/secrets.env` for secrets
 
-## Files you need
+## Host setup
 
-### 1. Normal configuration
+For a fresh Debian/Ubuntu host:
 
-Copy [.env.example](.env.example) to `.env` and edit it.
+```bash
+sudo ./scripts/setup-host.sh
+```
 
-Variables kept in `.env`:
+The script:
+
+- installs Docker, Compose, UFW, `fail2ban`, OpenSSL, `age`, curl and unattended security updates
+- creates `data/`, `uploads/`, `backups/`, `secrets/` and `certs/`
+- reads existing `.env`, `secrets/secrets.env` and `certs/` if they are already there
+- asks only for missing values
+- can let you paste the Cloudflare Origin certificate and private key during setup if the `certs/` files are missing
+- generates an `age` backup keypair if one is not already configured and shows it once so you can save it
+- can enable automatic security updates with `unattended-upgrades`
+- can enable a basic firewall for SSH, HTTP and HTTPS
+- can disable SSH login for `root` by writing an `sshd_config.d` drop-in
+- can enable `fail2ban` protection for SSH brute-force attempts
+- starts the Docker stack automatically at the end
+- generates temporary bootstrap admin credentials for first login and prints them for immediate login without storing them in a file
+- stores `BACKUP_AGE_PUBLIC_KEY` on the server and never stores the `age` secret key
+
+You do not need to create `.env`, `secrets/secrets.env`, `certs/cert.pem`, or `certs/key.pem` before running the setup script.
+
+### Optional pre-seeding before setup
+
+If you prefer, you can still create these files in advance. The script will reuse them and ask only for anything that is still missing.
+
+Typical values in `.env`:
 
 - `TZ`
 - `LISTMONK_DOMAIN`
@@ -44,18 +68,19 @@ Variables kept in `.env`:
 - `BACKUP_SCHEDULE`
 - `R2_BUCKET`
 - `R2_ENDPOINT`
-- `R2_PREFIX`
+- `R2_PREFIX` (typically `backups` for paths like `R2_BUCKET/backups/db-...sql.gz.age`)
 
-### 2. Secrets
-
-Copy [secrets/secrets.env.example](secrets/secrets.env.example) to `secrets/secrets.env` and fill it in.
-
-Variables kept in `secrets/secrets.env`:
+Typical values in `secrets/secrets.env`:
 
 - `POSTGRES_PASSWORD`
 - `BACKUP_AGE_PUBLIC_KEY`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
+
+If you already have your Cloudflare Origin certificate files, place them here before running setup:
+
+- `certs/cert.pem`
+- `certs/key.pem`
 
 ### Backup `age` keys
 
@@ -74,39 +99,13 @@ age-keygen -y listmonk-backup.agekey
 - save the line starting with `AGE-SECRET-KEY-1...` in your password manager or another safe place
 - do not store the secret key in [secrets/secrets.env](secrets/secrets.env) or anywhere else on the server
 
-The setup script generates temporary first-login credentials automatically and passes them only to the initial `docker compose up -d`. They are not written to `.env` or `secrets/secrets.env`.
-
-### 3. Cloudflare and TLS certificate
-
-Put your Cloudflare Origin certificate files here:
-
-- `certs/cert.pem`
-- `certs/key.pem`
+### Cloudflare and TLS certificate
 
 Use Cloudflare SSL/TLS mode `Full (Strict)`.
 
 Disable `cache everything` rule for the domain/subdomain, if you have it. It interferes with the admin interface.
 
-## Host setup
-
-For a fresh Debian/Ubuntu host:
-
-```bash
-sudo ./scripts/setup-host.sh
-```
-
-The script:
-
-- installs Docker, Compose, UFW, OpenSSL, `age`, curl and unattended security updates
-- creates `data/`, `uploads/`, `backups/`, `secrets/` and `certs/`
-- reads existing `.env`, `secrets/secrets.env` and `certs/` if they are already there
-- asks only for missing values
-- generates an `age` backup keypair if one is not already configured and shows it once so you can save it
-- can enable automatic security updates with `unattended-upgrades`
-- can enable a basic firewall for SSH, HTTP and HTTPS
-- starts the Docker stack automatically at the end
-- generates temporary bootstrap admin credentials for first login and prints them for immediate login without storing them in a file
-- stores `BACKUP_AGE_PUBLIC_KEY` on the server and never stores the `age` secret key
+The setup script generates temporary first-login credentials automatically and passes them only to the initial `docker compose up -d`. They are not written to `.env` or `secrets/secrets.env`.
 
 ## Start the stack manually
 
@@ -174,8 +173,10 @@ What happens:
 
 - PostgreSQL is dumped
 - the dump is compressed and encrypted with `age` using `BACKUP_AGE_PUBLIC_KEY`
-- the encrypted file and checksum are uploaded to R2
+- the encrypted file and checksum are uploaded to R2 under `R2_BUCKET/R2_PREFIX/`
 - local backups older than `BACKUP_RETENTION_DAYS` are removed
+
+By default, new backups use object names like `backups/db-20260316T030000Z.sql.gz.age` and `backups/db-20260316T030000Z.sql.gz.age.sha256` inside the bucket.
 
 Remote retention should be configured with an R2 Lifecycle Rule.
 

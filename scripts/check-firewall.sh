@@ -83,7 +83,7 @@ show_ufw_rules() {
 }
 
 show_docker_user_chain() {
-    local rules
+    local rules num_rules
 
     if ! rules=$(as_root iptables -S DOCKER-USER 2>/dev/null); then
         warn "Could not inspect the DOCKER-USER chain."
@@ -92,7 +92,11 @@ show_docker_user_chain() {
 
     printf '%s\n' "$rules"
 
-    if [[ $(printf '%s\n' "$rules" | grep -c '^-A DOCKER-USER ') -eq 1 ]] \
+    num_rules=$(printf '%s\n' "$rules" | grep -c '^-A DOCKER-USER ' || true)
+
+    if [[ "$num_rules" -eq 0 ]]; then
+        warn "DOCKER-USER is empty. If Docker publishes ports, UFW can be bypassed for container traffic."
+    elif [[ "$num_rules" -eq 1 ]] \
         && printf '%s\n' "$rules" | grep -q '^-A DOCKER-USER -j RETURN$'; then
         warn "DOCKER-USER has no filtering rules. If Docker publishes ports, UFW can be bypassed for container traffic."
     else
@@ -119,7 +123,7 @@ print_verdict() {
     cat <<'EOF'
 
 Interpretation guide:
-- If UFW is active but DOCKER-USER only contains `-j RETURN`, Docker-published ports may bypass UFW.
+- If UFW is active but DOCKER-USER is empty or only contains `-j RETURN`, Docker-published ports may bypass UFW.
 - In this project, ports 80 and 443 are expected to be public, and 9000 should stay on 127.0.0.1 only.
 - To prove UFW is really blocking something, the final check must be external: test from another host against a port that should be closed.
 EOF
