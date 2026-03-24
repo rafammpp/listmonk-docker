@@ -72,6 +72,8 @@ latest_backup_key() {
 
 require_cmd age
 require_cmd aws
+require_cmd createdb
+require_cmd dropdb
 require_cmd psql
 require_cmd sha256sum
 require_cmd gzip
@@ -141,6 +143,11 @@ esac
 
 read_age_secret_key
 
+recreate_database() {
+    dropdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" --if-exists --force "$DB_NAME"
+    createdb -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME"
+}
+
 mkdir -p /tmp/restore-work
 encrypted_file="/tmp/restore-work/$(basename "$backup_key")"
 checksum_file="${encrypted_file}.sha256"
@@ -176,9 +183,10 @@ identity_file="/tmp/restore-work/backup.agekey"
 printf '%s\n' "$backup_age_secret_key" > "$identity_file"
 backup_age_secret_key=
 chmod 600 "$identity_file"
+recreate_database
 age -d -i "$identity_file" "$encrypted_file" \
     | gzip -d \
-    | psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME"
+    | psql -v ON_ERROR_STOP=1 -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME"
 trap - EXIT INT TERM
 cleanup
 

@@ -204,6 +204,8 @@ Restore a specific backup:
 
 The host restore script asks for confirmation, then prompts for the `age` secret key without echoing it, and stops `app` during restore unless you use `--no-stop`.
 
+During restore, the target PostgreSQL database is dropped and recreated before the SQL dump is imported, so the restore is applied to an empty database and stops immediately if any SQL error occurs.
+
 ## Migration
 
 To move the stack to another server:
